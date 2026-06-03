@@ -1,0 +1,9 @@
+country,iso3,year,e_pop_num,e_inc_100k,e_inc_100k_lo,e_inc_100k_hi,e_inc_num,e_inc_num_lo,e_inc_num_hi,e_mort_exc_tbhiv_num,e_tbhiv_prct
+Democratic Republic of the Congo,COD,2015,77300000,346,284,419,268000,220000,325000,48000,11.3
+Democratic Republic of the Congo,COD,2016,79700000,347,284,420,277000,226000,334000,48000,11.6
+Democratic Republic of the Congo,COD,2017,82200000,349,286,422,287000,235000,346000,48000,11.9
+Democratic Republic of the Congo,COD,2018,84700000,350,286,421,296000,242000,357000,48000,12.2
+Democratic Republic of the Congo,COD,2019,87300000,349,286,421,305000,250000,368000,48000,12.5
+Democratic Republic of the Congo,COD,2020,90000000,351,286,424,316000,257000,382000,48000,12.8
+Democratic Republic of the Congo,COD,2021,92900000,344,282,415,320000,262000,386000,47000,13.1
+Democratic Republic of the Congo,COD,2022,99000000,327,269,394,324000,266000,390000,44000,13.3
