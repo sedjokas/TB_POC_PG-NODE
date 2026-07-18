@@ -27,7 +27,17 @@ Model: Physics-Guided Neural ODE augmenting a 4-compartment SLIT model.
     7-year  sinusoidal pair  captures inter-year transmission trend
 ODE solver: custom RK4 in PyTorch (BPTT — no torchdiffeq required).
 
-Reference: Kasereka et al. (2026), IEEE Access.
+Post-review correction (see PGNODEFunc docstring below): the reported
+reproduction number now includes the susceptible-fraction S(t)/N(t)
+factor (making it a genuine Reff(t), not R0(t)) and the relapse +
+treatment-recovery-to-S exit routes from T. This changes the reported
+range from [1.44, 2.80] to approximately [1.05, 2.08]; see the paper
+for the full derivation and discussion.
+
+Reference: Kasereka et al., Compartmental Mathematical Models of TB
+Transmission: A Critical Survey of Differential Equation Frameworks,
+Current Gaps, and Perspectives on Physics-Guided Neural ODE.
+Results in Engineering (under review).
 """
 
 import os
@@ -235,8 +245,18 @@ class PGNODEFunc(nn.Module):
         log_tau   — log notification/treatment initiation rate τ
         nn_res    — NeuralResidual (32 hidden units, 1 hidden layer)
 
-    R₀(t) = β_eff(t) · v / [(v + μ)(τ + d + μ)]
+    R_eff(t) = [S(t)/N(t)] · β_eff(t) · v · (GAMMA+DELTA+MU) /
+               [(v + MU) · ((τ + D_TB + MU)(GAMMA+DELTA+MU) - DELTA·τ)]
     where  β_eff(t) = β₀ + Δλ(t) · N/I
+
+    NOTE (post-review correction): earlier versions of this file computed
+    R0_at() as beta_eff*v / [(v+MU)*(tau+D_TB+MU)], i.e. without the
+    S(t)/N(t) susceptible-fraction factor and without accounting for the
+    relapse (DELTA) and treatment-recovery-to-S (GAMMA) exit routes from
+    T that are actually present in slit_rhs(). Both corrections are now
+    included below; see the paper's Eq. (R0_pgnode) and (R0_drc_full).
+    The S(t)/N(t) factor is the dominant correction (~0.71-0.73 across
+    the whole 2015-2022 window, not close to 1 as originally assumed).
     """
     def __init__(self, hidden=32):
         super().__init__()
@@ -256,8 +276,19 @@ class PGNODEFunc(nn.Module):
         dlam = self.nn_res(t, state)
         return slit_rhs(t, state, self.beta, self.v, self.tau, extra_foi=dlam)
 
-    def R0_at(self, beta_eff):
-        return (beta_eff * self.v) / ((self.v + MU) * (self.tau + D_TB + MU))
+    def R0_full_at(self, beta_eff):
+        """Basic reproduction number for the modified SLIT backbone
+        (includes the relapse + treatment-recovery-to-S exit routes
+        from T), evaluated at a given effective transmission rate.
+        Does NOT include susceptible depletion; see reff_at()."""
+        cprime = GAMMA + DELTA + MU
+        denom = (self.v + MU) * ((self.tau + D_TB + MU) * cprime - DELTA * self.tau)
+        return (beta_eff * self.v * cprime) / denom
+
+    def reff_at(self, beta_eff, s_over_n):
+        """Effective reproduction number: R0_full_at(beta_eff) scaled by
+        the current susceptible fraction S(t)/N(t)."""
+        return s_over_n * self.R0_full_at(beta_eff)
 
 
 class ClassicalSLIT(nn.Module):
@@ -279,7 +310,12 @@ class ClassicalSLIT(nn.Module):
         return slit_rhs(t, state, self.beta, self.v, self.tau)
 
     def R0(self):
-        return (self.beta * self.v) / ((self.v + MU) * (self.tau + D_TB + MU))
+        """Fixed basic reproduction number (DFE-based, S=N by definition),
+        including the relapse + treatment-recovery-to-S correction; see
+        the docstring on PGNODEFunc.R0_full_at for the same formula."""
+        cprime = GAMMA + DELTA + MU
+        denom = (self.v + MU) * ((self.tau + D_TB + MU) * cprime - DELTA * self.tau)
+        return (self.beta * self.v * cprime) / denom
 
 
 def obs(sol, tau):
@@ -380,7 +416,7 @@ print(f"\n{'Model':<18}{'Train RMSE(K)':<18}{'Val RMSE(K)':<14}{'Improvement'}")
 print(f"{'Classical SLIT':<18}{rs_tr:<18.2f}{rs_va:<14.2f}{'—'}")
 print(f"{'PG-NODE':<18}{rp_tr:<18.2f}{rp_va:<14.2f}{rmse_imp:+.1f}%")
 
-# --- Time-varying β_eff(t) and R0(t) ---
+# --- Time-varying β_eff(t) and Reff(t) (includes S(t)/N(t) + relapse/recovery) ---
 R0_s = slit.R0().item()
 R0_p, db = [], []
 with torch.no_grad():
@@ -388,16 +424,17 @@ with torch.no_grad():
         st_i = sol_p[ti]
         S, L, I, T_ = st_i[0]
         N_i    = (S + L + I + T_).item()
+        sn_i   = S.item() / N_i
         dlam_i = pgnd.nn_res(t_i, st_i).item()
         I_i    = I.item()
         dbeta_i = dlam_i * N_i / I_i if I_i > 1e-6 else 0.0
         beta_eff = pgnd.beta.item() + dbeta_i
-        R0_p.append(pgnd.R0_at(torch.tensor(beta_eff)).item())
+        R0_p.append(pgnd.reff_at(torch.tensor(beta_eff), sn_i).item())
         db.append(dbeta_i)
 
 print(f"\nClassical SLIT  R0 (fixed) = {R0_s:.3f}")
-print(f"PG-NODE  R0(t) range = [{min(R0_p):.3f}, {max(R0_p):.3f}]")
-print(f"\n{'Year/Quarter':>14}  {'Δβ':>8}  {'β_eff':>8}  {'R0':>8}")
+print(f"PG-NODE  Reff(t) range = [{min(R0_p):.3f}, {max(R0_p):.3f}]")
+print(f"\n{'Year/Quarter':>14}  {'Δβ':>8}  {'β_eff':>8}  {'Reff':>8}")
 for i, t_dec in enumerate(YEARS_ALL):
     print(f"  {t_dec:12.3f}  {db[i]:+8.4f}  "
           f"{pgnd.beta.item()+db[i]:8.4f}  {R0_p[i]:8.4f}")
@@ -464,7 +501,7 @@ import warnings as _w; _w.filterwarnings('ignore')
 y_ann_tr  = np.array([148., 155., 161., 167., 171., 145.])
 y_ann_val = np.array([158., 172.])
 
-arima_fit = SARIMA(y_ann_tr, order=(1, 1, 1)).fit(disp=False)
+arima_fit = SARIMA(y_ann_tr, order=(1, 1, 1)).fit()  # disp kwarg removed: unsupported on statsmodels>=0.13 ARIMA
 arima_fcast = arima_fit.forecast(steps=2)
 arima_fv    = np.array(arima_fcast)
 
@@ -618,21 +655,21 @@ ax.legend(); ax.grid(alpha=.3, axis="y")
 
 plt.tight_layout(); savefig(fig2, "fig2_notification_fit"); plt.close(fig2)
 
-# ─────── FIG 3 : R0(t) Trajectory ─────────────────────────────
+# ─────── FIG 3 : Reff(t) Trajectory (includes S(t)/N(t)) ───────
 fig3, axs3 = plt.subplots(1, 2, figsize=(12, 5))
 
 ax = axs3[0]
 ax.axhline(R0_s, color=C["slit"], lw=LW, ls="--",
            label=f"Classical SLIT: $\\mathcal{{R}}_0 = {R0_s:.2f}$ (fixed)")
 ax.plot(YEARS_ALL, R0_p, "o-", color=C["pg"], lw=LW, ms=6,
-        label="PG-NODE: $\\mathcal{R}_0(t)$ (time-varying)")
+        label="PG-NODE: $\\mathcal{R}_{\\mathrm{eff}}(t)$ (time-varying)")
 ax.fill_between(YEARS_ALL, R0_s, R0_p, alpha=.12, color=C["pg"])
 ax.axhline(1.0, color="k", lw=.8, ls=":", alpha=.5)
-ax.text(YEARS_ALL[0], 1.03, "$\\mathcal{R}_0=1$ threshold", fontsize=8)
+ax.text(YEARS_ALL[0], 1.03, "$\\mathcal{R}=1$ threshold", fontsize=8)
 ax.axvline(2020, color="red", lw=1.2, ls=":", alpha=.7)
 ax.axvspan(2020.5, 2022.5, alpha=.07, color="gray")
-ax.set(xlabel="Year", ylabel="$\\mathcal{R}_0(t)$",
-       title="(a) $\\mathcal{R}_0$ Trajectory",
+ax.set(xlabel="Year", ylabel="$\\mathcal{R}_{\\mathrm{eff}}(t)$",
+       title="(a) $\\mathcal{R}_{\\mathrm{eff}}$ Trajectory (includes $S(t)/N(t)$)",
        xlim=(YEARS_ALL[0]-0.3, YEARS_ALL[-1]+0.3))
 ax.legend(fontsize=8); ax.grid(alpha=.3)
 
@@ -740,8 +777,8 @@ print(f"\n  PG-NODE baseline:")
 print(f"    β0 = {pgnd.beta.item():.4f}  yr⁻¹")
 print(f"    v  = {pgnd.v.item():.6f} yr⁻¹")
 print(f"    τ  = {pgnd.tau.item():.4f}  yr⁻¹")
-print(f"    R0 range = [{min(R0_p):.3f}, {max(R0_p):.3f}]")
-print(f"    R0 peak  = {YEARS_ALL[np.argmax(R0_p)]:.3f}")
+print(f"    Reff range = [{min(R0_p):.3f}, {max(R0_p):.3f}]")
+print(f"    Reff peak  = {YEARS_ALL[np.argmax(R0_p)]:.3f}")
 
 print(f"\n  Validation RMSE improvement: {rmse_imp:.1f}%  "
       f"({rs_va:.2f}K → {rp_va:.2f}K, n_val={len(df_val)})")
