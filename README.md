@@ -8,30 +8,6 @@
 
 ---
 
-## Post-review corrections (read before using the DRC results)
-
-An external technical review found two issues in the originally released
-`pgnode_drc_tb.py`, both now fixed on this branch:
-
-1. **Reproduction number formula.** The reported quantity omitted the
-   susceptible-fraction factor `S(t)/N(t)` (making it a basic-reproduction-
-   number-like quantity rather than a genuine effective reproduction
-   number), and omitted the relapse (`DELTA`) and treatment-recovery-to-S
-   (`GAMMA`) exit routes from the `T` compartment that are present in
-   `slit_rhs()`. Both are now included in `PGNODEFunc.reff_at()` /
-   `ClassicalSLIT.R0()`. This changes the reported PG-NODE range from
-   `[1.44, 2.80]` to approximately `[1.05, 2.08]`, and the classical SLIT
-   fixed value from `1.47` to `1.48`. The fitted trajectories, notification
-   predictions, and RMSE values are **unaffected** (the bug was isolated to
-   how the reproduction number is derived from the fit, not the fit itself).
-2. **`statsmodels` compatibility.** `ARIMA(...).fit(disp=False)` no longer
-   accepts the `disp` keyword on `statsmodels>=0.13`; the call has been
-   updated to `.fit()`.
-
-See the paper for the full derivation and discussion.
-
----
-
 ## Overview
 
 This repository contains the Python scripts and processed data used to
